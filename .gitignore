@@ -1,0 +1,38 @@
+# ── Entornos virtuales ───────────────────────────────────────
+venv/
+.venv/
+env/
+
+# ── Secretos y configuración local ──────────────────────────
+config/.env
+.env
+*.env
+*.env.local
+
+# ── Proyectos clonados (repos externos — no parte de este repo)
+projects/
+
+# ── Logs y datos temporales ──────────────────────────────────
+logs/*.log
+logs/*.jsonl
+*.log
+
+# ── Python ───────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/
+.eggs/
+
+# ── IDEs ─────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store

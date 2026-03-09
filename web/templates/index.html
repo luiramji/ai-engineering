@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Engineering Platform</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+{% if page == "login" %}
+<!-- ═══════════════════════════════════════════ LOGIN PAGE ══ -->
+<div class="login-wrap">
+  <div class="login-box">
+    <div class="logo">
+      <span class="logo-icon">⚙</span>
+      <h1>AI Engineering</h1>
+      <p class="logo-sub">Platform</p>
+    </div>
+    <form method="POST" action="/login">
+      <div class="field">
+        <label>Usuario</label>
+        <input type="text" name="username" autocomplete="username" autofocus required>
+      </div>
+      <div class="field">
+        <label>Contraseña</label>
+        <input type="password" name="password" autocomplete="current-password" required>
+      </div>
+      {% if error %}
+      <div class="alert error">{{ error }}</div>
+      {% endif %}
+      <button type="submit" class="btn-primary">Ingresar →</button>
+    </form>
+  </div>
+</div>
+
+{% else %}
+<!-- ═══════════════════════════════════════════ CHAT PAGE ═══ -->
+<div class="layout">
+
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <span class="logo-icon">⚙</span>
+      <span>AI Engineering</span>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="section-title">PROYECTO ACTIVO</div>
+      <select id="project-select" class="project-select">
+        {% for p in projects %}
+        <option value="{{ p }}">{{ p }}</option>
+        {% endfor %}
+        {% if not projects %}
+        <option value="">Sin proyectos</option>
+        {% endif %}
+      </select>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="section-title">PROGRESO</div>
+      <div id="phase-list" class="phase-list">
+        <div class="phase-item" id="ph-setup">⚙️ Setup</div>
+        <div class="phase-item" id="ph-analyze">🔍 Análisis</div>
+        <div class="phase-item" id="ph-design">📐 Diseño</div>
+        <div class="phase-item" id="ph-implement">⚡ Implementación</div>
+        <div class="phase-item" id="ph-test">🧪 Tests</div>
+        <div class="phase-item" id="ph-commit">📦 Commit</div>
+        <div class="phase-item" id="ph-done">✅ Listo</div>
+      </div>
+    </div>
+
+    <div class="sidebar-footer">
+      <span>{{ user }}</span>
+      <a href="/logout" class="logout-link">Salir</a>
+    </div>
+  </aside>
+
+  <!-- Main -->
+  <main class="main">
+    <div class="chat-header">
+      <h2>Feature Request</h2>
+      <span id="status-badge" class="badge idle">Listo</span>
+    </div>
+
+    <div id="output" class="output"></div>
+
+    <div class="input-area">
+      <textarea
+        id="feature-input"
+        placeholder="Describe el feature a implementar... (ej: Agrega endpoint para listar usuarios con paginación)"
+        rows="3"
+      ></textarea>
+      <div class="input-controls">
+        <span id="char-count" class="char-count">0 chars</span>
+        <button id="submit-btn" class="btn-primary" onclick="submitFeature()">
+          Ejecutar →
+        </button>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script src="/static/app.js"></script>
+{% endif %}
+
+</body>
+</html>
