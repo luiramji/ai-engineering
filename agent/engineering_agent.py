@@ -172,12 +172,12 @@ async def run_feature_request(
     logger.info(f"Iniciando feature request: '{feature_request[:80]}'")
     logger.info(f"Proyecto: {project_name} en {project_path}")
 
-    async with MultiServerMCPClient(_mcp_connections()) as mcp_client:
-        tools = mcp_client.get_tools()
-        logger.info(f"MCP tools cargadas: {[t.name for t in tools]}")
+    mcp_client = MultiServerMCPClient(_mcp_connections())
+    tools = await mcp_client.get_tools()
+    logger.info(f"MCP tools cargadas: {[t.name for t in tools]}")
 
-        graph = _build_graph(tools)
-        final_state = await graph.ainvoke(initial_state)
+    graph = _build_graph(tools)
+    final_state = await graph.ainvoke(initial_state)
 
     logger.info(f"Feature request completado — fase final: {final_state.get('phase')}")
     return final_state
@@ -217,11 +217,11 @@ async def stream_feature_request(
         "result_summary": "",
     }
 
-    async with MultiServerMCPClient(_mcp_connections()) as mcp_client:
-        tools = mcp_client.get_tools()
-        graph = _build_graph(tools)
+    mcp_client = MultiServerMCPClient(_mcp_connections())
+    tools = await mcp_client.get_tools()
+    graph = _build_graph(tools)
 
-        async for event in graph.astream(initial_state, stream_mode="updates"):
+    async for event in graph.astream(initial_state, stream_mode="updates"):
             # event es un dict: {node_name: state_updates}
             for node_name, state_updates in event.items():
                 yield {
