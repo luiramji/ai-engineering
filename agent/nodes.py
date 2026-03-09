@@ -9,11 +9,16 @@ con su propio system prompt especializado.
 """
 import logging
 import sys
+import warnings
 from pathlib import Path
 from typing import Any
 
-from langchain_anthropic import ChatAnthropic
+from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
+
+# Suprimir warning de deprecación de create_react_agent hasta LangGraph v2.0
+# El import alternativo (langchain.agents) no existe en la versión actual
+warnings.filterwarnings("ignore", message=".*create_react_agent.*", category=DeprecationWarning)
 
 # Agregar raíz al path para imports absolutos
 sys.path.insert(0, "/opt/ai_engineering")
@@ -36,11 +41,16 @@ MAX_RETRIES = 2
 #  CLIENTES LLM (via LiteLLM Proxy)
 # ─────────────────────────────────────────────────────────────
 
-def _llm(model: str = AGENT_MODEL, max_tokens: int = 8192) -> ChatAnthropic:
-    """Crea un cliente LLM apuntando al LiteLLM Proxy."""
-    return ChatAnthropic(
+def _llm(model: str = AGENT_MODEL, max_tokens: int = 8192) -> ChatOpenAI:
+    """Crea un cliente LLM apuntando al LiteLLM Proxy via endpoint OpenAI-compatible.
+
+    Usa ChatOpenAI en lugar de ChatAnthropic para evitar el endpoint /v1/messages
+    de Anthropic, que en litellm-proxy-extras genera errores de importación
+    con litellm.types.proxy.litellm_pre_call_utils.
+    """
+    return ChatOpenAI(
         model=model,
-        base_url=LITELLM_PROXY_URL,
+        base_url=f"{LITELLM_PROXY_URL}/v1",
         api_key=LITELLM_MASTER_KEY,
         max_tokens=max_tokens,
     )
