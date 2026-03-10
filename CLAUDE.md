@@ -130,7 +130,6 @@ Tablas (7):
 - Job de sincronización GPS (`sync_gps_job.py`) generado y pusheado a GitHub
 
 ### Pendiente
-- [ ] Hacer Web UI servicio systemd (arranque automático)
 - [ ] Crear `/opt/ai_engineering/config/.env` con credenciales del Servidor 1
 - [ ] Instalar `fail2ban` en Servidor 1
 - [ ] Desplegar job GPS en Servidor 1
