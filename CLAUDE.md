@@ -121,7 +121,7 @@ Tablas (7):
 
 ## 6. ESTADO ACTUAL
 
-**Fecha de última actualización:** 10 marzo 2026 (sesión 2)
+**Fecha de última actualización:** 10 marzo 2026 (sesión 2 — todos los pendientes completados)
 
 ### Completado
 - LiteLLM Proxy configurado con 6 modelos
@@ -131,6 +131,8 @@ Tablas (7):
 - `config/.env` con credenciales del Servidor 1 (DB, Navixy, Telegram)
 - IPs corregidos: Servidor 2 (este) = `144.202.66.203`, Servidor 1 (prod) = `149.28.209.93`
 - `fail2ban` instalado y activo en Servidor 1 (jail sshd con defaults)
+- Job GPS (`tracker-gps-sync`) desplegado y corriendo en Servidor 1 como servicio systemd
+- Bugs corregidos: DB_PASSWORD con `@` (quote_plus), query `active=1` → `status='active'` (schema real)
+- `.venv/` removido del repo tracker-master y añadido a .gitignore
 
 ### Pendiente
-- [ ] Desplegar job GPS en Servidor 1
