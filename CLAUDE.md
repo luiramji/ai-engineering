@@ -134,4 +134,3 @@ Tablas (7):
 - [ ] Crear `/opt/ai_engineering/config/.env` con credenciales del Servidor 1
 - [ ] Instalar `fail2ban` en Servidor 1
 - [ ] Desplegar job GPS en Servidor 1
-- [ ] Corregir rutas de LiteLLM que apuntan a `/opt/tracker_master` (ruta incorrecta)
