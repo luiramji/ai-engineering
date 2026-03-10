@@ -130,7 +130,7 @@ Tablas (7):
 - Job de sincronización GPS (`sync_gps_job.py`) generado y pusheado a GitHub
 - `config/.env` con credenciales del Servidor 1 (DB, Navixy, Telegram)
 - IPs corregidos: Servidor 2 (este) = `144.202.66.203`, Servidor 1 (prod) = `149.28.209.93`
+- `fail2ban` instalado y activo en Servidor 1 (jail sshd con defaults)
 
 ### Pendiente
-- [ ] Instalar `fail2ban` en Servidor 1
 - [ ] Desplegar job GPS en Servidor 1
