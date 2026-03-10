@@ -16,8 +16,8 @@ Tu propósito es recibir feature requests en lenguaje natural y construir softwa
 
 | Recurso | Detalle |
 |---|---|
-| **Servidor 2 (este)** | IP `149.28.209.93`, usuario `aidev` |
-| **Servidor 1 (producción)** | IP `144.202.66.203`, usuario `tracker`, accesible por SSH desde aidev sin contraseña |
+| **Servidor 2 (este)** | IP `144.202.66.203`, usuario `aidev` |
+| **Servidor 1 (producción)** | IP `149.28.209.93`, usuario `tracker`, accesible por SSH desde aidev sin contraseña |
 | **LiteLLM Proxy** | `localhost:4000` |
 | **Web UI** | Puerto `8080` |
 
@@ -121,15 +121,16 @@ Tablas (7):
 
 ## 6. ESTADO ACTUAL
 
-**Fecha de última actualización:** 10 marzo 2026
+**Fecha de última actualización:** 10 marzo 2026 (sesión 2)
 
 ### Completado
 - LiteLLM Proxy configurado con 6 modelos
 - Agente LangGraph con flujo completo
-- Web UI corriendo en puerto 8080
+- Web UI corriendo en puerto 8080 (servicio systemd `ai-engineering-web`)
 - Job de sincronización GPS (`sync_gps_job.py`) generado y pusheado a GitHub
+- `config/.env` con credenciales del Servidor 1 (DB, Navixy, Telegram)
+- IPs corregidos: Servidor 2 (este) = `144.202.66.203`, Servidor 1 (prod) = `149.28.209.93`
 
 ### Pendiente
-- [ ] Crear `/opt/ai_engineering/config/.env` con credenciales del Servidor 1
 - [ ] Instalar `fail2ban` en Servidor 1
 - [ ] Desplegar job GPS en Servidor 1
