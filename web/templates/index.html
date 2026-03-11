@@ -9,13 +9,13 @@
 <body>
 
 {% if page == "login" %}
-<!-- ═══════════════════════════════════════════ LOGIN PAGE ══ -->
+<!-- ═══════════════════════════════════════════════ LOGIN ═══ -->
 <div class="login-wrap">
   <div class="login-box">
     <div class="logo">
-      <span class="logo-icon">⚙</span>
+      <div class="logo-icon">AI</div>
       <h1>AI Engineering</h1>
-      <p class="logo-sub">Platform</p>
+      <p class="logo-sub">Platform — Director Interface</p>
     </div>
     <form method="POST" action="/login">
       <div class="field">
@@ -29,27 +29,30 @@
       {% if error %}
       <div class="alert error">{{ error }}</div>
       {% endif %}
-      <button type="submit" class="btn-primary">Ingresar →</button>
+      <button type="submit" class="btn-primary">Ingresar</button>
     </form>
   </div>
 </div>
 
 {% else %}
-<!-- ═══════════════════════════════════════════ CHAT PAGE ═══ -->
+<!-- ═══════════════════════════════════════════════ MAIN ═══ -->
 <div class="layout">
 
-  <!-- Sidebar -->
-  <aside class="sidebar">
-    <div class="sidebar-header">
-      <span class="logo-icon">⚙</span>
-      <span>AI Engineering</span>
+  <!-- ╔═══════════════════════════════════════════╗ -->
+  <!-- ║  COLUMNA IZQUIERDA — Proyectos + Memoria  ║ -->
+  <!-- ╚═══════════════════════════════════════════╝ -->
+  <aside class="col-left">
+    <div class="col-header">
+      <span class="logo-badge">AI</span>
+      <span class="col-title">Proyectos</span>
     </div>
 
-    <div class="sidebar-section">
-      <div class="section-title">PROYECTO ACTIVO</div>
-      <select id="project-select" class="project-select">
+    <!-- Lista de proyectos -->
+    <div class="section">
+      <div class="section-label">PROYECTO ACTIVO</div>
+      <select id="project-select" class="project-select" onchange="onProjectChange(this.value)">
         {% for p in projects %}
-        <option value="{{ p }}">{{ p }}</option>
+        <option value="{{ p.id }}">{{ p.name }}</option>
         {% endfor %}
         {% if not projects %}
         <option value="">Sin proyectos</option>
@@ -57,49 +60,167 @@
       </select>
     </div>
 
-    <div class="sidebar-section">
-      <div class="section-title">PROGRESO</div>
-      <div id="phase-list" class="phase-list">
-        <div class="phase-item" id="ph-setup">⚙️ Setup</div>
-        <div class="phase-item" id="ph-analyze">🔍 Análisis</div>
-        <div class="phase-item" id="ph-design">📐 Diseño</div>
-        <div class="phase-item" id="ph-implement">⚡ Implementación</div>
-        <div class="phase-item" id="ph-test">🧪 Tests</div>
-        <div class="phase-item" id="ph-commit">📦 Commit</div>
-        <div class="phase-item" id="ph-done">✅ Listo</div>
+    <!-- Memoria del proyecto -->
+    <div class="section">
+      <div class="section-label">MEMORIA DEL PROYECTO</div>
+      <div id="project-memory" class="memory-box">
+        <div class="memory-placeholder">Selecciona un proyecto...</div>
       </div>
     </div>
 
-    <div class="sidebar-footer">
-      <span>{{ user }}</span>
+    <!-- Costos LLM -->
+    <div class="section">
+      <div class="section-label">COSTOS LLM HOY</div>
+      <div id="cost-summary" class="cost-box">
+        <div class="cost-loading">Cargando...</div>
+      </div>
+    </div>
+
+    <div class="col-footer">
+      <span class="user-badge">{{ user }}</span>
       <a href="/logout" class="logout-link">Salir</a>
     </div>
   </aside>
 
-  <!-- Main -->
-  <main class="main">
+  <!-- ╔═══════════════════════════════════════════╗ -->
+  <!-- ║         COLUMNA CENTRO — Chat             ║ -->
+  <!-- ╚═══════════════════════════════════════════╝ -->
+  <main class="col-center">
     <div class="chat-header">
-      <h2>Feature Request</h2>
-      <span id="status-badge" class="badge idle">Listo</span>
+      <div class="chat-title">
+        <span id="active-project-label">AI Engineering</span>
+        <span id="status-badge" class="badge idle">Listo</span>
+      </div>
+      <div class="header-controls">
+        <span id="elapsed-badge" class="elapsed-badge" style="display:none"></span>
+      </div>
     </div>
 
-    <div id="output" class="output"></div>
+    <!-- Mensajes del chat -->
+    <div id="chat-messages" class="chat-messages"></div>
 
+    <!-- Terminal de logs en vivo -->
+    <div class="log-panel" id="log-panel">
+      <div class="log-header">
+        <span class="log-title">Log en vivo</span>
+        <div class="log-controls">
+          <button class="log-btn" onclick="clearLog()">Limpiar</button>
+          <button class="log-btn" id="log-toggle" onclick="toggleLog()">Colapsar</button>
+        </div>
+      </div>
+      <div class="log-body" id="log-body">
+        <div class="log-placeholder">El log aparecerá aquí cuando el agente esté en ejecución...</div>
+      </div>
+    </div>
+
+    <!-- Input de instrucción -->
     <div class="input-area">
-      <textarea
-        id="feature-input"
-        placeholder="Describe el feature a implementar... (ej: Agrega endpoint para listar usuarios con paginación)"
-        rows="3"
-      ></textarea>
-      <div class="input-controls">
-        <span id="char-count" class="char-count">0 chars</span>
-        <button id="submit-btn" class="btn-primary" onclick="submitFeature()">
-          Ejecutar →
+      <div class="input-row">
+        <textarea
+          id="feature-input"
+          placeholder="Escribe una instrucción para el agente... (ej: Agrega endpoint de paginación en /api/routes)"
+          rows="3"
+        ></textarea>
+        <button id="submit-btn" class="btn-submit" onclick="submitFeature()">
+          <span class="btn-icon">→</span>
         </button>
+      </div>
+      <div class="input-meta">
+        <span id="char-count" class="char-count">0</span>
+        <span class="char-label">chars</span>
+        <span class="separator">|</span>
+        <label class="skip-label">
+          <input type="checkbox" id="skip-proposal" checked>
+          Proponer opciones al Director
+        </label>
       </div>
     </div>
   </main>
-</div>
+
+  <!-- ╔═══════════════════════════════════════════╗ -->
+  <!-- ║       COLUMNA DERECHA — Progreso          ║ -->
+  <!-- ╚═══════════════════════════════════════════╝ -->
+  <aside class="col-right">
+    <div class="col-header">
+      <span class="col-title">Progreso</span>
+      <span id="session-badge" class="session-badge"></span>
+    </div>
+
+    <!-- Pipeline de fases -->
+    <div class="section">
+      <div class="section-label">PIPELINE</div>
+      <div id="phase-list" class="phase-list">
+        <div class="phase-item" id="ph-setup">
+          <span class="ph-dot"></span>
+          <span class="ph-label">Setup</span>
+          <span class="ph-time" id="pt-setup"></span>
+        </div>
+        <div class="phase-item" id="ph-analyze">
+          <span class="ph-dot"></span>
+          <span class="ph-label">Análisis</span>
+          <span class="ph-time" id="pt-analyze"></span>
+        </div>
+        <div class="phase-item" id="ph-propose">
+          <span class="ph-dot"></span>
+          <span class="ph-label">Propuestas</span>
+          <span class="ph-time" id="pt-propose"></span>
+        </div>
+        <div class="phase-item" id="ph-design">
+          <span class="ph-dot"></span>
+          <span class="ph-label">Diseño</span>
+          <span class="ph-time" id="pt-design"></span>
+        </div>
+        <div class="phase-item" id="ph-implement">
+          <span class="ph-dot"></span>
+          <span class="ph-label">Implementación</span>
+          <span class="ph-time" id="pt-implement"></span>
+        </div>
+        <div class="phase-item" id="ph-pipeline">
+          <span class="ph-dot"></span>
+          <span class="ph-label">Pipeline QA</span>
+          <span class="ph-time" id="pt-pipeline"></span>
+        </div>
+        <div class="phase-item" id="ph-commit">
+          <span class="ph-dot"></span>
+          <span class="ph-label">Commit</span>
+          <span class="ph-time" id="pt-commit"></span>
+        </div>
+        <div class="phase-item" id="ph-pr">
+          <span class="ph-dot"></span>
+          <span class="ph-label">Pull Request</span>
+          <span class="ph-time" id="pt-pr"></span>
+        </div>
+        <div class="phase-item" id="ph-deploy">
+          <span class="ph-dot"></span>
+          <span class="ph-label">Deploy</span>
+          <span class="ph-time" id="pt-deploy"></span>
+        </div>
+        <div class="phase-item" id="ph-done">
+          <span class="ph-dot"></span>
+          <span class="ph-label">Listo</span>
+          <span class="ph-time" id="pt-done"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Checklist del proyecto -->
+    <div class="section">
+      <div class="section-label">CHECKLIST</div>
+      <div id="checklist" class="checklist-box">
+        <div class="checklist-placeholder">Cargando...</div>
+      </div>
+    </div>
+
+    <!-- Última sesión -->
+    <div class="section">
+      <div class="section-label">ÚLTIMA SESIÓN</div>
+      <div id="last-session" class="last-session-box">
+        <div class="last-session-placeholder">—</div>
+      </div>
+    </div>
+  </aside>
+
+</div><!-- /layout -->
 
 <script src="/static/app.js"></script>
 {% endif %}

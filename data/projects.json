@@ -1,0 +1,38 @@
+[
+  {
+    "id": "tracker_master",
+    "name": "Tracker Master",
+    "description": "Plataforma de visibilidad logística para transporte de carga en Guatemala",
+    "repository": "git@github.com:luiramji/tracker-master.git",
+    "local_path": "/opt/ai_engineering/projects/tracker_master",
+    "servers": [
+      {
+        "ip": "149.28.209.93",
+        "user": "tracker",
+        "ssh_key": "/home/aidev/.ssh/id_ed25519",
+        "purpose": "production",
+        "deploy_path": "/opt/tracker_master",
+        "service_name": "tracker-bot"
+      }
+    ],
+    "memory": {
+      "architecture": "LangGraph bot con MemorySaver, LiteLLM Proxy, MariaDB, Navixy API, python-telegram-bot v21+",
+      "tech_decisions": [
+        "LLM via LiteLLM usando ChatOpenAI con openai_api_base para evitar error 500",
+        "MariaDB lastrowid no funciona con mariadbconnector — usar SELECT LAST_INSERT_ID()",
+        "DB_PASSWORD con @ requiere quote_plus en SQLAlchemy URL",
+        "Navixy places son /place/list no zone ni geofence",
+        "Timestamps Navixy en UTC-6 naive — sumar 6h para UTC",
+        "Geocodificacion Nominatim sin countrycodes con fallback"
+      ],
+      "tech_debt": [
+        "Tests para create_navixy_place node pendientes",
+        "Arquitectura multi-tenant no implementada"
+      ],
+      "roadmap": []
+    },
+    "checklist": [],
+    "created_at": "2026-03-11T00:00:00Z",
+    "updated_at": "2026-03-11T00:00:00Z"
+  }
+]

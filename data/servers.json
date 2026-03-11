@@ -1,0 +1,11 @@
+[
+  {
+    "ip": "149.28.209.93",
+    "user": "tracker",
+    "ssh_key": "/home/aidev/.ssh/id_ed25519",
+    "project": "tracker_master",
+    "purpose": "production",
+    "status": "active",
+    "services": ["tracker-bot", "tracker-gps-sync"]
+  }
+]

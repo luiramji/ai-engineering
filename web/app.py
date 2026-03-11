@@ -1,16 +1,17 @@
 """
-AI Engineering Platform — Web Interface
+AI Engineering Platform — Web Interface (v2)
 
-FastAPI app con:
-- Login con sesión (cookie JWT simple)
-- Chat en tiempo real via WebSocket
-- Streaming del progreso del agente fase a fase
-- Listado de proyectos disponibles
+Layout tres columnas:
+  Izquierda: panel de proyectos + memoria del proyecto activo
+  Centro:    chat con el agente
+  Derecha:   checklist de tareas + progreso del feature activo
+
+FastAPI + WebSockets + JWT auth
 """
 import asyncio
 import json
 import logging
-import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -28,8 +29,10 @@ from fastapi.templating import Jinja2Templates
 
 sys.path.insert(0, "/opt/ai_engineering")
 from config.settings import (
-    WEB_HOST, WEB_PORT, WEB_USER, WEB_PASSWORD, SECRET_KEY, PROJECTS_DIR,
+    WEB_HOST, WEB_PORT, WEB_USER, WEB_PASSWORD, SECRET_KEY, PROJECTS_DIR, DATA_DIR,
 )
+from agent.project_manager import get_all as get_all_projects, get_project
+from agent.cost_tracker import get_summary as get_cost_summary
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +46,7 @@ app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
 
 # ─────────────────────────────────────────────────────────────
-#  AUTH — JWT simple en cookie
+#  AUTH
 # ─────────────────────────────────────────────────────────────
 
 def _create_token(username: str) -> str:
@@ -69,7 +72,29 @@ def get_current_user(session: Optional[str] = Cookie(default=None)) -> str:
 
 
 # ─────────────────────────────────────────────────────────────
-#  RUTAS HTTP
+#  LOG HANDLER — redirige logs al WebSocket
+# ─────────────────────────────────────────────────────────────
+
+class WSLogHandler(logging.Handler):
+    def __init__(self, queue: asyncio.Queue):
+        super().__init__()
+        self.queue = queue
+        self.setFormatter(logging.Formatter("%(asctime)s  %(message)s", datefmt="%H:%M:%S"))
+
+    def emit(self, record: logging.LogRecord):
+        try:
+            self.queue.put_nowait({
+                "type": "log",
+                "level": record.levelname,
+                "msg": self.format(record),
+                "ts": int(record.created * 1000),
+            })
+        except asyncio.QueueFull:
+            pass
+
+
+# ─────────────────────────────────────────────────────────────
+#  ROUTES
 # ─────────────────────────────────────────────────────────────
 
 @app.get("/login", response_class=HTMLResponse)
@@ -84,12 +109,9 @@ async def login(username: str = Form(...), password: str = Form(...)):
         resp = RedirectResponse(url="/", status_code=303)
         resp.set_cookie("session", token, httponly=True, max_age=86400)
         return resp
-    return HTMLResponse(
-        content=f"""
-        <html><body style="font-family:monospace;padding:40px;background:#0d1117;color:#ff6b6b">
-        <h2>Login fallido</h2><p>Credenciales incorrectas.</p>
-        <a href="/login" style="color:#58a6ff">Volver</a></body></html>
-        """,
+    return templates.TemplateResponse(
+        "index.html",
+        {"request": Request, "page": "login", "error": "Credenciales incorrectas"},
         status_code=401,
     )
 
@@ -107,38 +129,66 @@ async def home(request: Request, session: Optional[str] = Cookie(default=None)):
     if not user:
         return RedirectResponse(url="/login")
 
-    # Listar proyectos disponibles
-    projects = []
-    if PROJECTS_DIR.exists():
-        for p in sorted(PROJECTS_DIR.iterdir()):
-            if p.is_dir() and (p / ".git").exists():
-                projects.append(p.name)
-
+    projects = get_all_projects()
     return templates.TemplateResponse("index.html", {
         "request": request,
-        "page": "chat",
+        "page": "main",
         "user": user,
         "projects": projects,
     })
 
 
+# ─────────────────────────────────────────────────────────────
+#  API ENDPOINTS
+# ─────────────────────────────────────────────────────────────
+
 @app.get("/api/projects")
-async def list_projects(user: str = Depends(get_current_user)):
-    projects = []
-    if PROJECTS_DIR.exists():
-        for p in sorted(PROJECTS_DIR.iterdir()):
-            if p.is_dir() and (p / ".git").exists():
-                import subprocess
-                try:
-                    result = subprocess.run(
-                        ["git", "log", "-1", "--pretty=format:%h │ %s"],
-                        cwd=str(p), capture_output=True, text=True, timeout=5,
-                    )
-                    last_commit = result.stdout.strip()
-                except Exception:
-                    last_commit = "N/A"
-                projects.append({"name": p.name, "path": str(p), "last_commit": last_commit})
-    return JSONResponse({"projects": projects})
+async def api_projects(user: str = Depends(get_current_user)):
+    """Lista proyectos con último commit."""
+    projects = get_all_projects()
+    result = []
+    for p in projects:
+        local_path = p.get("local_path", "")
+        last_commit = "N/A"
+        if local_path and Path(local_path).exists():
+            try:
+                r = subprocess.run(
+                    ["git", "log", "-1", "--pretty=format:%h | %s | %ar"],
+                    cwd=local_path, capture_output=True, text=True, timeout=5,
+                )
+                last_commit = r.stdout.strip()
+            except Exception:
+                pass
+        result.append({**p, "last_commit": last_commit})
+    return JSONResponse({"projects": result})
+
+
+@app.get("/api/project/{project_id}")
+async def api_project_detail(project_id: str, user: str = Depends(get_current_user)):
+    """Detalles de un proyecto con memoria y checklist."""
+    project = get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Proyecto no encontrado")
+    return JSONResponse(project)
+
+
+@app.get("/api/costs")
+async def api_costs(user: str = Depends(get_current_user)):
+    """Resumen de costos LLM."""
+    return JSONResponse(get_cost_summary())
+
+
+@app.get("/api/health")
+async def api_health():
+    """Health check."""
+    import httpx
+    from config.settings import LITELLM_PROXY_URL
+    try:
+        resp = httpx.get(f"{LITELLM_PROXY_URL}/health/liveliness", timeout=3)
+        litellm_ok = resp.status_code == 200
+    except Exception:
+        litellm_ok = False
+    return JSONResponse({"status": "ok", "litellm": litellm_ok})
 
 
 # ─────────────────────────────────────────────────────────────
@@ -146,16 +196,25 @@ async def list_projects(user: str = Depends(get_current_user)):
 # ─────────────────────────────────────────────────────────────
 
 PHASE_LABELS = {
-    "setup":      "⚙️  Iniciando...",
-    "analyze":    "🔍 Analizando codebase...",
-    "design":     "📐 Diseñando solución...",
-    "implement":  "⚡ Implementando código...",
-    "test":       "🧪 Ejecutando tests...",
-    "fix":        "🔧 Corrigiendo errores...",
-    "commit":     "📦 Haciendo commit...",
-    "done":       "✅ Completado",
-    "error":      "❌ Error",
+    "setup":          "Iniciando...",
+    "analyze":        "Analizando codebase...",
+    "propose":        "Generando propuestas...",
+    "await_decision": "Esperando decision del Director...",
+    "design":         "Disenando solucion...",
+    "implement":      "Implementando codigo...",
+    "pipeline":       "Ejecutando pipeline de calidad...",
+    "fix":            "Corrigiendo errores...",
+    "commit":         "Haciendo commit...",
+    "pr":             "Creando Pull Request...",
+    "deploy":         "Desplegando...",
+    "done":           "Completado",
+    "error":          "Error",
 }
+
+_AGENT_LOGGERS = [
+    "agent.nodes", "agent.engineering_agent",
+    "agent.deploy", "pipeline.quality",
+]
 
 
 async def _send(ws: WebSocket, msg_type: str, **data):
@@ -167,7 +226,6 @@ async def _send(ws: WebSocket, msg_type: str, **data):
 
 @app.websocket("/ws/agent")
 async def agent_websocket(websocket: WebSocket):
-    # Verificar sesión en el handshake
     session = websocket.cookies.get("session")
     user = _verify_token(session) if session else None
     if not user:
@@ -177,58 +235,72 @@ async def agent_websocket(websocket: WebSocket):
     await websocket.accept()
     logger.info(f"WebSocket conectado — usuario: {user}")
 
+    log_queue: asyncio.Queue = asyncio.Queue(maxsize=500)
+    ws_handler = WSLogHandler(log_queue)
+    ws_handler.setLevel(logging.INFO)
+
+    agent_loggers = [logging.getLogger(name) for name in _AGENT_LOGGERS]
+    for al in agent_loggers:
+        al.addHandler(ws_handler)
+
+    stop_logs = asyncio.Event()
+
+    async def forward_logs():
+        while not stop_logs.is_set():
+            try:
+                item = await asyncio.wait_for(log_queue.get(), timeout=0.3)
+                await _send(websocket, **item)
+            except asyncio.TimeoutError:
+                continue
+        while not log_queue.empty():
+            item = log_queue.get_nowait()
+            await _send(websocket, **item)
+
+    log_task = asyncio.create_task(forward_logs())
+
     try:
-        # Esperar el mensaje de inicio con feature request y proyecto
         raw = await websocket.receive_text()
         payload = json.loads(raw)
-        feature_request = payload.get("feature_request", "").strip()
-        project_name    = payload.get("project", "tracker_master")
+        feature_request  = payload.get("feature_request", "").strip()
+        project_name     = payload.get("project", "tracker_master")
+        chosen_proposal  = payload.get("chosen_proposal", "a")
 
         if not feature_request:
-            await _send(websocket, "error", message="El feature request no puede estar vacío.")
+            await _send(websocket, "error", message="El feature request no puede estar vacio.")
             return
 
         await _send(websocket, "started", project=project_name, feature=feature_request)
 
-        # Importar aquí para no bloquear al iniciar la app
         from agent.engineering_agent import stream_feature_request
 
-        async for event in stream_feature_request(feature_request, project_name):
+        async for event in stream_feature_request(feature_request, project_name, chosen_proposal=chosen_proposal):
             node  = event.get("node", "")
             phase = event.get("phase", "")
             label = PHASE_LABELS.get(phase, phase)
 
-            # Notificar cambio de fase
             await _send(websocket, "phase", node=node, phase=phase, label=label)
 
-            # Emitir contenido de cada fase
-            if phase == "analyze" and event.get("analysis"):
-                await _send(websocket, "analysis", content=event["analysis"])
-
-            elif phase == "design" and event.get("design"):
-                await _send(websocket, "design", content=event["design"])
-
-            elif phase == "implement" and event.get("implementation_summary"):
-                await _send(websocket, "implementation", content=event["implementation_summary"])
-
-            elif phase == "test" and event.get("test_results"):
-                passed = event.get("tests_passed", False)
-                await _send(websocket, "tests",
-                            content=event["test_results"],
-                            passed=passed)
-
-            elif phase == "fix" and event.get("implementation_summary"):
-                await _send(websocket, "fix", content=event["implementation_summary"])
-
-            elif phase == "commit" and event.get("commit_hash"):
-                await _send(websocket, "commit", hash=event["commit_hash"])
-
-            elif phase == "done" and event.get("result_summary"):
-                await _send(websocket, "done", summary=event["result_summary"])
-
-            elif phase == "error" and event.get("error"):
-                await _send(websocket, "error", message=event["error"])
-                return
+            # Enviar datos específicos de cada fase
+            for key, evt_type in [
+                ("analysis",              "analysis"),
+                ("proposal_a",            "proposal"),
+                ("design",                "design"),
+                ("implementation_summary","implementation"),
+                ("test_results",          "tests"),
+                ("pr_url",                "pr"),
+                ("result_summary",        "done"),
+                ("error",                 "error"),
+            ]:
+                if event.get(key):
+                    extra = {}
+                    if key == "test_results":
+                        extra["passed"] = event.get("tests_passed", False)
+                    if key == "proposal_a":
+                        extra["proposal_b"] = event.get("proposal_b", "")
+                    if key == "error":
+                        await _send(websocket, "error", message=event[key])
+                        return
+                    await _send(websocket, evt_type, content=event[key], **extra)
 
         await _send(websocket, "finished")
 
@@ -238,15 +310,16 @@ async def agent_websocket(websocket: WebSocket):
         logger.exception(f"Error en WebSocket: {e}")
         await _send(websocket, "error", message=f"Error interno: {str(e)[:200]}")
     finally:
+        stop_logs.set()
+        await asyncio.sleep(0.4)
+        log_task.cancel()
+        for al in agent_loggers:
+            al.removeHandler(ws_handler)
         try:
             await websocket.close()
         except Exception:
             pass
 
-
-# ─────────────────────────────────────────────────────────────
-#  ENTRY POINT
-# ─────────────────────────────────────────────────────────────
 
 def run():
     uvicorn.run(

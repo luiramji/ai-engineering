@@ -1,229 +1,429 @@
-/* AI Engineering Platform — Frontend */
-
+/* AI Engineering Platform — Frontend v2 */
 'use strict';
 
-const output     = document.getElementById('output');
-const submitBtn  = document.getElementById('submit-btn');
-const featureInp = document.getElementById('feature-input');
-const statusBadge = document.getElementById('status-badge');
-const charCount  = document.getElementById('char-count');
-
+// ─── State ───────────────────────────────────────────────────
 let ws = null;
+let running = false;
+let startTime = null;
+let elapsedInterval = null;
+let activeProject = document.getElementById('project-select')?.value || '';
 
-// ── char counter ──────────────────────────────────────────────
-featureInp.addEventListener('input', () => {
-  charCount.textContent = `${featureInp.value.length} chars`;
-});
-
-// ── Phase sidebar map ─────────────────────────────────────────
+// Phase map: server key → DOM id suffix
 const PHASE_MAP = {
-  setup:     'ph-setup',
-  analyze:   'ph-analyze',
-  design:    'ph-design',
-  implement: 'ph-implement',
-  test:      'ph-test',
-  fix:       'ph-test',
-  commit:    'ph-commit',
-  done:      'ph-done',
+  setup: 'setup', analyze: 'analyze', propose: 'propose',
+  await_decision: 'propose', design: 'design', implement: 'implement',
+  pipeline: 'pipeline', fix: 'pipeline', commit: 'commit',
+  pr: 'pr', deploy: 'deploy', done: 'done', error: 'done',
 };
 
-let currentPhaseEl = null;
-
-function setPhase(phase) {
-  if (currentPhaseEl) {
-    currentPhaseEl.classList.remove('active');
-    currentPhaseEl.classList.add('done');
+// ─── Init ────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  const input = document.getElementById('feature-input');
+  if (input) {
+    input.addEventListener('input', () => {
+      const cc = document.getElementById('char-count');
+      if (cc) cc.textContent = input.value.length;
+    });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) submitFeature();
+    });
   }
-  const id = PHASE_MAP[phase];
-  if (id) {
-    currentPhaseEl = document.getElementById(id);
-    if (currentPhaseEl) currentPhaseEl.classList.add('active');
+
+  loadProjectData(activeProject);
+  loadCosts();
+
+  // Refresh costs every 30s
+  setInterval(loadCosts, 30000);
+});
+
+// ─── Project selection ───────────────────────────────────────
+function onProjectChange(projectId) {
+  activeProject = projectId;
+  const label = document.getElementById('active-project-label');
+  if (label) label.textContent = projectId;
+  loadProjectData(projectId);
+}
+
+async function loadProjectData(projectId) {
+  if (!projectId) return;
+  try {
+    const resp = await fetch(`/api/project/${projectId}`);
+    if (!resp.ok) return;
+    const data = await resp.json();
+    renderMemory(data.memory || {});
+    renderChecklist(data.checklist || []);
+    renderLastSession(data.memory?.last_session);
+  } catch (e) {
+    console.error('loadProjectData:', e);
   }
 }
 
-function resetPhases() {
-  Object.values(PHASE_MAP).forEach(id => {
-    const el = document.getElementById(id);
-    if (el) { el.classList.remove('active', 'done', 'error'); }
+function renderMemory(memory) {
+  const box = document.getElementById('project-memory');
+  if (!box) return;
+
+  const arch = memory.architecture || '';
+  const decisions = memory.tech_decisions || [];
+  const debt = memory.tech_debt || [];
+
+  let html = '';
+  if (arch) {
+    html += `<div class="memory-item"><strong>Arquitectura:</strong><br>${esc(arch.substring(0, 120))}${arch.length > 120 ? '...' : ''}</div>`;
+  }
+  if (decisions.length) {
+    html += `<div class="memory-item"><strong>Decisiones:</strong><br>`;
+    decisions.slice(0, 3).forEach(d => {
+      html += `<span class="memory-tag">${esc(d.substring(0, 60))}</span>`;
+    });
+    html += '</div>';
+  }
+  if (debt.length) {
+    html += `<div class="memory-item"><strong>Deuda técnica:</strong><br>`;
+    debt.slice(0, 2).forEach(d => {
+      html += `<span class="memory-tag" style="border-color:var(--yellow)">${esc(d.substring(0, 60))}</span>`;
+    });
+    html += '</div>';
+  }
+  box.innerHTML = html || '<div class="memory-placeholder">Sin memoria registrada.</div>';
+}
+
+function renderChecklist(checklist) {
+  const box = document.getElementById('checklist');
+  if (!box) return;
+  if (!checklist.length) {
+    box.innerHTML = '<div class="checklist-placeholder">Sin tareas.</div>';
+    return;
+  }
+  box.innerHTML = checklist.map(item => {
+    const done = item.status === 'done' || item.status === 'completed';
+    return `<div class="checklist-item">
+      <span class="check-icon ${done ? 'done' : 'pending'}">${done ? '✓' : '○'}</span>
+      <span class="check-text ${done ? 'done' : ''}">${esc(item.task)}</span>
+    </div>`;
+  }).join('');
+}
+
+function renderLastSession(ls) {
+  const box = document.getElementById('last-session');
+  if (!box) return;
+  if (!ls) {
+    box.innerHTML = '<div class="last-session-placeholder">Sin sesiones previas.</div>';
+    return;
+  }
+  box.innerHTML = `
+    <div class="ls-row"><span>Fecha</span><span class="ls-val">${esc((ls.date||'').substring(0,10))}</span></div>
+    <div class="ls-row"><span>Feature</span><span class="ls-val" title="${esc(ls.feature||'')}">${esc((ls.feature||'').substring(0,30))}</span></div>
+    <div class="ls-row"><span>Commit</span><span class="ls-val">${esc(ls.commit||'N/A')}</span></div>
+    ${ls.pr ? `<div class="ls-row"><span>PR</span><span class="ls-val"><a class="msg-link" href="${esc(ls.pr)}" target="_blank">#${esc(ls.pr.split('/').pop())}</a></span></div>` : ''}
+  `;
+}
+
+async function loadCosts() {
+  try {
+    const resp = await fetch('/api/costs');
+    if (!resp.ok) return;
+    const data = await resp.json();
+    renderCosts(data);
+  } catch (e) {}
+}
+
+function renderCosts(data) {
+  const box = document.getElementById('cost-summary');
+  if (!box) return;
+  const total = data.total_usd || 0;
+  const byModel = data.by_model || {};
+  let html = `<div class="cost-total">$${total.toFixed(4)}</div>`;
+  Object.entries(byModel).sort((a,b) => b[1]-a[1]).slice(0, 5).forEach(([model, cost]) => {
+    html += `<div class="cost-row"><span class="cost-model">${esc(model)}</span><span class="cost-val">$${cost.toFixed(4)}</span></div>`;
   });
-  currentPhaseEl = null;
+  box.innerHTML = html;
 }
 
-// ── Append message block ──────────────────────────────────────
-function addBlock(cssClass, label, content, collapsible = false) {
-  const block = document.createElement('div');
-  block.className = `msg-block ${cssClass}`;
-
-  const labelEl = document.createElement('div');
-  labelEl.className = 'msg-label';
-  labelEl.textContent = label;
-
-  const contentEl = document.createElement('div');
-  contentEl.className = 'msg-content';
-  contentEl.textContent = content;
-
-  block.appendChild(labelEl);
-  block.appendChild(contentEl);
-
-  if (collapsible && content.length > 400) {
-    contentEl.classList.add('collapsed');
-    const btn = document.createElement('span');
-    btn.className = 'expand-btn';
-    btn.textContent = '▼ Mostrar completo';
-    btn.onclick = () => {
-      const collapsed = contentEl.classList.toggle('collapsed');
-      btn.textContent = collapsed ? '▼ Mostrar completo' : '▲ Colapsar';
-    };
-    block.appendChild(btn);
-  }
-
-  output.appendChild(block);
-  output.scrollTop = output.scrollHeight;
-  return block;
-}
-
-function addSpinner(label) {
-  const block = document.createElement('div');
-  block.className = 'msg-block phase';
-  block.innerHTML = `<span class="spinner"></span><span>${label}</span>`;
-  block.id = 'spinner-block';
-  output.appendChild(block);
-  output.scrollTop = output.scrollHeight;
-}
-
-function removeSpinner() {
-  const s = document.getElementById('spinner-block');
-  if (s) s.remove();
-}
-
-// ── WebSocket handler ─────────────────────────────────────────
-function connectAndRun(featureRequest, project) {
-  if (ws) { ws.close(); ws = null; }
-
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  ws = new WebSocket(`${proto}://${location.host}/ws/agent`);
-
-  ws.onopen = () => {
-    ws.send(JSON.stringify({ feature_request: featureRequest, project }));
-  };
-
-  ws.onmessage = (evt) => {
-    const msg = JSON.parse(evt.data);
-    removeSpinner();
-
-    switch (msg.type) {
-
-      case 'started':
-        addBlock('phase', '🚀 INICIADO', `Proyecto: ${msg.project}\nFeature: ${msg.feature}`);
-        break;
-
-      case 'phase':
-        setPhase(msg.phase);
-        if (msg.phase !== 'done' && msg.phase !== 'error') {
-          addSpinner(msg.label);
-        }
-        break;
-
-      case 'analysis':
-        addBlock('analysis', '🔍 ANÁLISIS DEL CODEBASE', msg.content, true);
-        break;
-
-      case 'design':
-        addBlock('design', '📐 DISEÑO DE SOLUCIÓN', msg.content, true);
-        break;
-
-      case 'implementation':
-        addBlock('implement', '⚡ IMPLEMENTACIÓN', msg.content, true);
-        break;
-
-      case 'tests':
-        addBlock(
-          msg.passed ? 'tests-ok' : 'tests-fail',
-          msg.passed ? '🧪 TESTS — PASARON ✓' : '🧪 TESTS — FALLARON ✗',
-          msg.content, true,
-        );
-        break;
-
-      case 'fix':
-        addBlock('implement', '🔧 CORRECCIÓN APLICADA', msg.content, true);
-        break;
-
-      case 'commit':
-        addBlock('commit', '📦 COMMIT Y PUSH', `Commit: ${msg.hash}`);
-        break;
-
-      case 'done':
-        setPhase('done');
-        addBlock('done-ok', '✅ COMPLETADO', msg.summary);
-        setStatus('done', 'Completado');
-        setRunning(false);
-        break;
-
-      case 'error':
-        addBlock('err', '❌ ERROR', msg.message);
-        setStatus('error', 'Error');
-        setRunning(false);
-        // Marcar fase activa como error
-        if (currentPhaseEl) {
-          currentPhaseEl.classList.remove('active');
-          currentPhaseEl.classList.add('error');
-        }
-        break;
-
-      case 'finished':
-        removeSpinner();
-        setRunning(false);
-        break;
-    }
-  };
-
-  ws.onerror = () => {
-    removeSpinner();
-    addBlock('err', '❌ CONEXIÓN', 'Error de WebSocket. Recarga la página.');
-    setStatus('error', 'Error');
-    setRunning(false);
-  };
-
-  ws.onclose = () => {
-    removeSpinner();
-  };
-}
-
-function setStatus(cls, label) {
-  statusBadge.className = `badge ${cls}`;
-  statusBadge.textContent = label;
-}
-
-function setRunning(running) {
-  submitBtn.disabled = running;
-  featureInp.disabled = running;
-  submitBtn.textContent = running ? 'Ejecutando...' : 'Ejecutar →';
-}
-
-// ── Submit ────────────────────────────────────────────────────
+// ─── Submit feature request ──────────────────────────────────
 function submitFeature() {
-  const text = featureInp.value.trim();
-  if (!text) { featureInp.focus(); return; }
+  const input = document.getElementById('feature-input');
+  if (!input) return;
+  const text = input.value.trim();
+  if (!text || running) return;
 
-  const project = document.getElementById('project-select').value;
-  if (!project) {
-    addBlock('err', 'ERROR', 'No hay proyectos disponibles.');
+  const projectId = document.getElementById('project-select')?.value || activeProject;
+  if (!projectId) {
+    addMessage('error', 'Selecciona un proyecto primero.');
     return;
   }
 
-  // Reset UI
-  output.innerHTML = '';
-  resetPhases();
-  setStatus('running', 'Ejecutando');
-  setRunning(true);
-
-  connectAndRun(text, project);
+  openWS(text, projectId);
+  input.value = '';
+  const cc = document.getElementById('char-count');
+  if (cc) cc.textContent = '0';
 }
 
-// ── Enter to submit (Ctrl+Enter) ──────────────────────────────
-featureInp.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-    e.preventDefault();
-    submitFeature();
+function openWS(featureRequest, projectId) {
+  if (ws) { ws.close(); ws = null; }
+
+  setRunning(true);
+  resetPhases();
+  addMessage('feature', `Instrucción: ${featureRequest}`);
+
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(`${proto}//${location.host}/ws/agent`);
+
+  ws.onopen = () => {
+    const payload = {
+      feature_request: featureRequest,
+      project: projectId,
+      chosen_proposal: 'a',
+    };
+    ws.send(JSON.stringify(payload));
+  };
+
+  ws.onmessage = (event) => {
+    try {
+      handleWsMessage(JSON.parse(event.data));
+    } catch (e) {
+      console.error('WS message parse error:', e);
+    }
+  };
+
+  ws.onclose = () => {
+    setRunning(false);
+  };
+
+  ws.onerror = (e) => {
+    addMessage('error', 'Error de conexión con el agente.');
+    setRunning(false);
+  };
+}
+
+// ─── WS message handler ──────────────────────────────────────
+function handleWsMessage(msg) {
+  const type = msg.type;
+
+  if (type === 'phase') {
+    markPhase(msg.phase, msg.label);
   }
-});
+  else if (type === 'log') {
+    appendLog(msg.level, msg.msg);
+  }
+  else if (type === 'analysis') {
+    addMessage('analysis', msg.content, 'Análisis del codebase');
+  }
+  else if (type === 'proposal') {
+    renderProposal(msg.content, msg.proposal_b);
+  }
+  else if (type === 'design') {
+    addMessage('system', msg.content, 'Plan técnico');
+  }
+  else if (type === 'implementation') {
+    addMessage('system', msg.content, 'Implementación');
+  }
+  else if (type === 'tests') {
+    const cls = msg.passed ? 'result' : 'error';
+    addMessage(cls, msg.content, `Pipeline: ${msg.passed ? 'PASS' : 'FAIL'}`);
+  }
+  else if (type === 'pr') {
+    const link = msg.content ? `<a class="msg-link" href="${esc(msg.content)}" target="_blank">${esc(msg.content)}</a>` : '—';
+    addMessageHTML('result', `<div class="msg-label">Pull Request creado</div>${link}`);
+  }
+  else if (type === 'done') {
+    addMessage('result', msg.summary || msg.content, 'Completado');
+    markPhase('done', 'Completado');
+    setBadge('done', 'Listo');
+    setRunning(false);
+    loadProjectData(activeProject);
+    loadCosts();
+  }
+  else if (type === 'error') {
+    addMessage('error', msg.message, 'Error');
+    markPhaseError();
+    setBadge('error', 'Error');
+    setRunning(false);
+  }
+  else if (type === 'finished') {
+    setRunning(false);
+  }
+}
+
+// ─── Phase tracking ──────────────────────────────────────────
+let currentPhase = null;
+
+function resetPhases() {
+  currentPhase = null;
+  document.querySelectorAll('.phase-item').forEach(el => {
+    el.classList.remove('active', 'done', 'error');
+    const time = el.querySelector('.ph-time');
+    if (time) time.textContent = '';
+  });
+  document.getElementById('session-badge').textContent = '';
+}
+
+function markPhase(phase, label) {
+  const key = PHASE_MAP[phase] || phase;
+  const el = document.getElementById(`ph-${key}`);
+  if (!el) return;
+
+  // Mark previous phase as done
+  if (currentPhase && currentPhase !== key) {
+    const prev = document.getElementById(`ph-${currentPhase}`);
+    if (prev) {
+      prev.classList.remove('active');
+      prev.classList.add('done');
+      const pt = prev.querySelector('.ph-time');
+      if (pt) pt.textContent = formatElapsed();
+    }
+  }
+
+  currentPhase = key;
+  el.classList.remove('done', 'error');
+  el.classList.add('active');
+
+  // Update session badge
+  const sb = document.getElementById('session-badge');
+  if (sb && label) sb.textContent = label;
+}
+
+function markPhaseError() {
+  if (currentPhase) {
+    const el = document.getElementById(`ph-${currentPhase}`);
+    if (el) {
+      el.classList.remove('active', 'done');
+      el.classList.add('error');
+    }
+  }
+}
+
+// ─── Chat messages ───────────────────────────────────────────
+function addMessage(cls, content, label) {
+  const box = document.getElementById('chat-messages');
+  if (!box) return;
+  const div = document.createElement('div');
+  div.className = `chat-msg ${cls}`;
+  let html = '';
+  if (label) html += `<div class="msg-label">${esc(label)}</div>`;
+  html += `<div class="msg-content">${esc(content)}</div>`;
+  div.innerHTML = html;
+  box.appendChild(div);
+  box.scrollTop = box.scrollHeight;
+}
+
+function addMessageHTML(cls, html) {
+  const box = document.getElementById('chat-messages');
+  if (!box) return;
+  const div = document.createElement('div');
+  div.className = `chat-msg ${cls}`;
+  div.innerHTML = html;
+  box.appendChild(div);
+  box.scrollTop = box.scrollHeight;
+}
+
+function renderProposal(optionA, optionB) {
+  const box = document.getElementById('chat-messages');
+  if (!box) return;
+  const div = document.createElement('div');
+  div.className = 'chat-msg proposal';
+  div.innerHTML = `
+    <div class="msg-label">Propuestas técnicas — elige una</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;">
+      <div style="background:var(--bg-3);border-radius:4px;padding:8px;font-size:11px;line-height:1.5;">${esc(optionA.substring(0,400))}</div>
+      <div style="background:var(--bg-3);border-radius:4px;padding:8px;font-size:11px;line-height:1.5;">${esc(optionB.substring(0,400))}</div>
+    </div>
+    <div class="proposal-options">
+      <button class="btn-option" onclick="chooseProposal('a', this)">Opción A</button>
+      <button class="btn-option" onclick="chooseProposal('b', this)">Opción B</button>
+    </div>
+  `;
+  box.appendChild(div);
+  box.scrollTop = box.scrollHeight;
+}
+
+function chooseProposal(choice, btn) {
+  btn.parentElement.querySelectorAll('.btn-option').forEach(b => b.classList.remove('chosen'));
+  btn.classList.add('chosen');
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'proposal_choice', choice }));
+  }
+}
+
+// ─── Log panel ───────────────────────────────────────────────
+function appendLog(level, msg) {
+  const body = document.getElementById('log-body');
+  if (!body) return;
+
+  // Remove placeholder
+  const placeholder = body.querySelector('.log-placeholder');
+  if (placeholder) placeholder.remove();
+
+  const line = document.createElement('div');
+  const cls = ['INFO','WARNING','ERROR'].includes(level) ? level : 'default';
+  line.className = `log-line ${cls}`;
+  line.textContent = msg;
+  body.appendChild(line);
+
+  // Keep max 300 lines
+  while (body.children.length > 300) body.removeChild(body.firstChild);
+  body.scrollTop = body.scrollHeight;
+}
+
+function clearLog() {
+  const body = document.getElementById('log-body');
+  if (body) body.innerHTML = '<div class="log-placeholder">Log limpiado.</div>';
+}
+
+function toggleLog() {
+  const panel = document.getElementById('log-panel');
+  const btn   = document.getElementById('log-toggle');
+  if (!panel) return;
+  const collapsed = panel.classList.toggle('collapsed');
+  if (btn) btn.textContent = collapsed ? 'Expandir' : 'Colapsar';
+}
+
+// ─── UI helpers ──────────────────────────────────────────────
+function setRunning(val) {
+  running = val;
+  const btn = document.getElementById('submit-btn');
+  if (btn) btn.disabled = val;
+
+  if (val) {
+    startTime = Date.now();
+    setBadge('running', 'Ejecutando...');
+    elapsedInterval = setInterval(updateElapsed, 1000);
+  } else {
+    if (elapsedInterval) { clearInterval(elapsedInterval); elapsedInterval = null; }
+    const eb = document.getElementById('elapsed-badge');
+    if (eb) eb.style.display = 'none';
+  }
+}
+
+function setBadge(cls, text) {
+  const badge = document.getElementById('status-badge');
+  if (!badge) return;
+  badge.className = `badge ${cls}`;
+  badge.textContent = text;
+}
+
+function updateElapsed() {
+  if (!startTime) return;
+  const secs = Math.floor((Date.now() - startTime) / 1000);
+  const m = Math.floor(secs / 60).toString().padStart(2, '0');
+  const s = (secs % 60).toString().padStart(2, '0');
+  const eb = document.getElementById('elapsed-badge');
+  if (eb) { eb.style.display = 'inline'; eb.textContent = `${m}:${s}`; }
+}
+
+function formatElapsed() {
+  if (!startTime) return '';
+  const secs = Math.floor((Date.now() - startTime) / 1000);
+  const m = Math.floor(secs / 60);
+  const s = secs % 60;
+  return m > 0 ? `${m}m${s}s` : `${s}s`;
+}
+
+function esc(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
