@@ -418,6 +418,66 @@ function formatElapsed() {
   return m > 0 ? `${m}m${s}s` : `${s}s`;
 }
 
+// ─── New Project Modal ───────────────────────────────────────
+function openNewProjectModal() {
+  document.getElementById('modal-overlay').style.display = 'flex';
+  document.getElementById('np-name').focus();
+}
+
+function closeNewProjectModal() {
+  document.getElementById('modal-overlay').style.display = 'none';
+  document.getElementById('new-project-form').reset();
+  document.getElementById('np-error').style.display = 'none';
+}
+
+async function submitNewProject(e) {
+  e.preventDefault();
+  const btn = document.getElementById('np-submit');
+  const errEl = document.getElementById('np-error');
+  const exclusive = document.getElementById('np-exclusive').checked;
+  btn.disabled = true;
+  btn.textContent = exclusive ? 'Creando servidor...' : 'Creando...';
+  errEl.style.display = 'none';
+
+  try {
+    const resp = await fetch('/api/projects', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name:             document.getElementById('np-name').value.trim(),
+        description:      document.getElementById('np-desc').value.trim(),
+        repository:       document.getElementById('np-repo').value.trim(),
+        exclusive_server: document.getElementById('np-exclusive').checked,
+      }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      errEl.textContent = data.detail || 'Error al crear el proyecto';
+      errEl.style.display = 'block';
+      return;
+    }
+    // Agregar al select y seleccionarlo
+    const sel = document.getElementById('project-select');
+    // Quitar opción vacía si existe
+    const empty = sel.querySelector('option[value=""]');
+    if (empty) empty.remove();
+    // Agregar nueva opción
+    const opt = document.createElement('option');
+    opt.value = data.id;
+    opt.textContent = data.name;
+    sel.appendChild(opt);
+    sel.value = data.id;
+    onProjectChange(data.id);
+    closeNewProjectModal();
+  } catch (err) {
+    errEl.textContent = 'Error de conexión';
+    errEl.style.display = 'block';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Crear proyecto';
+  }
+}
+
 function esc(str) {
   if (!str) return '';
   return String(str)
@@ -426,4 +486,75 @@ function esc(str) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+// ─── Greeting Section ────────────────────────────────────────────────────────
+
+async function submitGreeting() {
+  const input     = document.getElementById('greeting-name');
+  const resultDiv = document.getElementById('greeting-result');
+
+  // Guardia: elementos deben existir en el DOM
+  if (!input || !resultDiv) return;
+
+  const name = input.value.trim();
+
+  // Validaciones cliente (espejo de las del backend)
+  if (!name) {
+    _renderGreetingError(resultDiv, 'El nombre no puede estar vacío.');
+    return;
+  }
+  if (name.length > 100) {
+    _renderGreetingError(resultDiv, 'Nombre demasiado largo (máx. 100 caracteres).');
+    return;
+  }
+
+  // Estado de carga
+  input.disabled = true;
+  resultDiv.innerHTML = '<div class="result-label">Cargando…</div>';
+
+  try {
+    const resp = await fetch(`/api/greeting/${encodeURIComponent(name)}`);
+
+    if (!resp.ok) {
+      // Intentar leer el mensaje de error del backend (formato FastAPI estándar)
+      let detail = `Error ${resp.status}`;
+      try {
+        const errBody = await resp.json();
+        if (errBody?.detail) detail = errBody.detail;
+      } catch (_) { /* ignorar si el body no es JSON */ }
+      _renderGreetingError(resultDiv, detail);
+      return;
+    }
+
+    const data      = await resp.json();
+    const timestamp = data.timestamp
+      ? new Date(data.timestamp).toLocaleTimeString('es-ES')
+      : '';
+
+    resultDiv.innerHTML = `
+      <div class="greeting-result">
+        <div class="result-label">✓ Saludo generado</div>
+        <div class="result-text">${esc(data.greeting)}</div>
+        ${timestamp ? `<div style="font-size:10px;color:var(--text-muted);margin-top:6px;">${timestamp}</div>` : ''}
+      </div>
+    `;
+
+  } catch (e) {
+    _renderGreetingError(resultDiv, 'Error de conexión. Intenta de nuevo.');
+    console.error('[submitGreeting]', e);
+  } finally {
+    input.disabled = false;
+    input.focus();
+  }
+}
+
+function _renderGreetingError(resultDiv, message) {
+  // Prefijo _ = función de módulo privado (convención proyecto)
+  resultDiv.innerHTML = `
+    <div class="greeting-result greeting-result--error">
+      <div class="result-label">✗ Error</div>
+      <div class="result-text">${esc(message)}</div>
+    </div>
+  `;
 }

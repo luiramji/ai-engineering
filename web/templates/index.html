@@ -49,7 +49,10 @@
 
     <!-- Lista de proyectos -->
     <div class="section">
-      <div class="section-label">PROYECTO ACTIVO</div>
+      <div class="section-label" style="display:flex;justify-content:space-between;align-items:center;">
+        PROYECTO ACTIVO
+        <button class="btn-new-project" onclick="openNewProjectModal()" title="Nuevo proyecto">+</button>
+      </div>
       <select id="project-select" class="project-select" onchange="onProjectChange(this.value)">
         {% for p in projects %}
         <option value="{{ p.id }}">{{ p.name }}</option>
@@ -74,6 +77,28 @@
       <div id="cost-summary" class="cost-box">
         <div class="cost-loading">Cargando...</div>
       </div>
+    </div>
+
+    <!-- ── Saludo Personalizado ─────────────────────────── -->
+    <div class="section greeting-section">
+      <div class="section-label" style="margin-bottom: 0;">SALUDO</div>
+      <div class="greeting-form">
+        <input
+          type="text"
+          id="greeting-name"
+          class="greeting-input"
+          placeholder="Tu nombre..."
+          maxlength="100"
+          onkeydown="if(event.key==='Enter') submitGreeting()"
+        >
+        <button
+          class="btn-secondary"
+          onclick="submitGreeting()"
+          style="width: auto; padding: 8px 12px; font-size: 11px;"
+          title="Saludar"
+        >→</button>
+      </div>
+      <div id="greeting-result"></div>
     </div>
 
     <div class="col-footer">
@@ -221,6 +246,42 @@
   </aside>
 
 </div><!-- /layout -->
+
+<!-- ═══════════════════════════════════════════════ MODAL NUEVO PROYECTO ═══ -->
+<div id="modal-overlay" class="modal-overlay" style="display:none" onclick="closeNewProjectModal()">
+  <div class="modal-box" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <span class="modal-title">Nuevo proyecto</span>
+      <button class="modal-close" onclick="closeNewProjectModal()">✕</button>
+    </div>
+    <form id="new-project-form" onsubmit="submitNewProject(event)">
+      <div class="field">
+        <label>Nombre *</label>
+        <input type="text" id="np-name" placeholder="ej: mi-proyecto" required>
+      </div>
+      <div class="field">
+        <label>Descripción</label>
+        <input type="text" id="np-desc" placeholder="Descripción corta del proyecto">
+      </div>
+      <div class="field">
+        <label>Repositorio GitHub <span style="color:var(--text-muted);font-size:11px">(vacío = crear automáticamente)</span></label>
+        <input type="text" id="np-repo" placeholder="git@github.com:usuario/repo.git  ó  dejar vacío">
+      </div>
+      <div class="field">
+        <label class="checkbox-label">
+          <input type="checkbox" id="np-exclusive">
+          <span>Requiere servidor exclusivo</span>
+          <span style="color:var(--text-muted);font-size:11px;margin-left:6px">(se crea automáticamente en Vultr)</span>
+        </label>
+      </div>
+      <div id="np-error" class="alert error" style="display:none"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn-secondary" onclick="closeNewProjectModal()">Cancelar</button>
+        <button type="submit" class="btn-primary" id="np-submit">Crear proyecto</button>
+      </div>
+    </form>
+  </div>
+</div>
 
 <script src="/static/app.js"></script>
 {% endif %}
