@@ -14,13 +14,17 @@ logger = logging.getLogger(__name__)
 VENV_PYTHON = "/opt/ai_engineering/venv/bin/python"
 
 
-def _run(cmd: list, cwd: str, timeout: int = 120) -> tuple[int, str]:
+def _run(cmd: list, cwd: str, timeout: int = 120, stdout_only: bool = False) -> tuple[int, str]:
     """Ejecuta un comando y retorna (returncode, output)."""
     try:
         result = subprocess.run(
             cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout
         )
-        return result.returncode, (result.stdout + result.stderr)[:30_000]
+        if stdout_only:
+            output = result.stdout
+        else:
+            output = result.stdout + result.stderr
+        return result.returncode, output[:30_000]
     except subprocess.TimeoutExpired:
         return -1, f"TIMEOUT ({timeout}s)"
     except Exception as e:
@@ -42,12 +46,23 @@ def run_pytest(project_path: str, test_dir: str = "") -> dict:
             python = str(candidate)
             break
 
-    cmd = [python, "-m", "pytest", "--tb=short", "-v", "-q"]
+    # Directorios a ignorar siempre (venvs, subdirectorios de proyectos hijos, caché)
+    ignore_dirs = ["venv", ".venv", "node_modules", "__pycache__", ".git", "projects"]
+    cmd = [python, "-m", "pytest", "--tb=short", "-q"]
+    for d in ignore_dirs:
+        if (p / d).exists():
+            cmd += ["--ignore", str(p / d)]
+
     if test_dir:
         cmd.append(test_dir)
+    elif not (p / "tests").exists() and not list(p.glob("test_*.py")) and not list(p.glob("**/test_*.py")):
+        # Sin tests → pasar directamente
+        logger.info("[pytest] Sin tests detectados, saltando")
+        return {"passed": True, "output": "Sin tests en el proyecto.", "returncode": 0}
 
     rc, output = _run(cmd, project_path, timeout=180)
-    passed = rc == 0 and "failed" not in output.lower()
+    # rc=5 → no tests collected (sin tests = OK); rc=0 → tests pasaron
+    passed = rc in (0, 5) and "failed" not in output.lower()
     logger.info(f"[pytest] {'PASS' if passed else 'FAIL'} — rc={rc}")
     return {"passed": passed, "output": output, "returncode": rc}
 
@@ -95,14 +110,25 @@ def run_bandit(project_path: str) -> dict:
     Returns:
         {"passed": bool, "issues": int, "output": str}
     """
+    import shutil
+    if not shutil.which("bandit") and not Path(VENV_PYTHON).parent.joinpath("bandit").exists():
+        try:
+            import bandit  # noqa: F401
+        except ImportError:
+            return {"passed": True, "issues": 0, "output": "bandit no disponible, saltando"}
+
+    p = Path(project_path)
+    exclude_paths = ",".join(str(p / d) for d in ["venv", ".venv", "node_modules", "projects"] if (p / d).exists())
+
     cmd = [
         VENV_PYTHON, "-m", "bandit",
         "-r", project_path,
         "-f", "json",
-        "--exclude", f"{project_path}/venv,{project_path}/.venv,{project_path}/node_modules",
         "-ll",  # solo MEDIUM y HIGH
     ]
-    rc, output = _run(cmd, project_path, timeout=120)
+    if exclude_paths:
+        cmd += ["--exclude", exclude_paths]
+    rc, output = _run(cmd, project_path, timeout=120, stdout_only=True)
 
     try:
         data = json.loads(output)

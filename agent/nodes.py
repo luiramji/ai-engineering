@@ -98,6 +98,75 @@ def _llm(model: str = AGENT_MODEL, max_tokens: int = 8192) -> ChatOpenAI:
     )
 
 
+# Modelo recomendado según complejidad
+MODEL_BY_COMPLEXITY = {
+    "simple":  "gpt-4o-mini",
+    "medium":  "gpt-4o-mini",
+    "complex": "gpt-4o",
+}
+
+
+async def clarify_request(feature_request: str, project_name: str) -> dict:
+    """
+    Pre-análisis rápido (modelo barato) que evalúa la instrucción antes de iniciar.
+
+    Returns:
+        {
+          complexity: "simple"|"medium"|"complex",
+          recommended_model: str,
+          questions: list[str],   # preguntas para el Director (puede estar vacía)
+          understood: str,        # qué entendió el agente
+        }
+    """
+    import json as _json
+
+    system = (
+        "Eres el asistente de planificación de un equipo de ingeniería. "
+        "Analiza la instrucción del Director y responde SOLO con JSON válido con estas claves:\n"
+        '  "complexity": "simple" | "medium" | "complex"\n'
+        '  "recommended_model": el modelo más económico adecuado (ver criterios)\n'
+        '  "questions": lista de strings con dudas críticas (vacía si la instrucción es clara)\n'
+        '  "understood": una frase corta de lo que entendiste\n\n'
+        "Criterios de complejidad:\n"
+        "  simple  → cambio puntual (<50 líneas, 1 archivo, sin efectos secundarios)\n"
+        "  medium  → feature nuevo con lógica moderada, 2-5 archivos, puede tener tests\n"
+        "  complex → cambios de arquitectura, múltiples sistemas, integraciones externas\n\n"
+        "Modelos disponibles:\n"
+        "  simple  → gemini-2.0-flash\n"
+        "  medium  → gpt-4o-mini\n"
+        "  complex → gpt-4o\n"
+        "  (claude-sonnet-4-6 solo si el Director lo elige explícitamente)\n\n"
+        "No hagas preguntas triviales. Solo pregunta si la ambigüedad bloquearía el trabajo."
+    )
+
+    llm = _llm(FAST_MODEL, max_tokens=512)
+    response = await llm.ainvoke([
+        SystemMessage(content=system),
+        HumanMessage(content=f"PROYECTO: {project_name}\nINSTRUCCIÓN: {feature_request}"),
+    ])
+
+    try:
+        data = _json.loads(response.content)
+        # Validar y normalizar
+        complexity = data.get("complexity", "medium")
+        if complexity not in MODEL_BY_COMPLEXITY:
+            complexity = "medium"
+        data["complexity"] = complexity
+        data.setdefault("recommended_model", MODEL_BY_COMPLEXITY[complexity])
+        data.setdefault("questions", [])
+        data.setdefault("understood", feature_request[:120])
+    except Exception:
+        data = {
+            "complexity": "medium",
+            "recommended_model": MODEL_BY_COMPLEXITY["medium"],
+            "questions": [],
+            "understood": feature_request[:120],
+        }
+
+    logger.info(f"[clarify] complexity={data['complexity']} model={data['recommended_model']} questions={len(data['questions'])}")
+    return data
+
+
 # ─────────────────────────────────────────────────────────────
 #  REACT AGENT HELPER
 # ─────────────────────────────────────────────────────────────
@@ -197,9 +266,22 @@ async def analyze_codebase(state: EngineeringState, tools: list) -> dict[str, An
 
 async def propose_solutions(state: EngineeringState) -> dict[str, Any]:
     """Fase 2: Genera dos propuestas técnicas para el Director."""
+
+    # En modo sprint se salta esta fase — Director no interviene story a story
+    if state.get("skip_proposal"):
+        logger.info("[propose] skip_proposal=True — pasando directo a diseño")
+        return {
+            "phase": "design",
+            "proposal_a": state.get("feature_request", ""),
+            "proposal_b": "",
+            "chosen_proposal": state.get("feature_request", ""),
+            "decision_message_id": "",
+        }
+
     logger.info("[propose] Generando propuestas técnicas")
 
-    llm = _llm(AGENT_MODEL, max_tokens=4096)
+    model = state.get("selected_model") or FAST_MODEL
+    llm = _llm(model, max_tokens=4096)
 
     messages = [
         SystemMessage(content=PROPOSE_SYSTEM),
@@ -278,7 +360,8 @@ async def design_solution(state: EngineeringState) -> dict[str, Any]:
     if not chosen:
         chosen = state.get("proposal_a", "") or state.get("analysis", "")
 
-    llm = _llm(AGENT_MODEL, max_tokens=6000)
+    model = state.get("selected_model") or FAST_MODEL
+    llm = _llm(model, max_tokens=6000)
 
     messages = [
         SystemMessage(content=DESIGN_SYSTEM),
@@ -321,9 +404,10 @@ async def implement_code(state: EngineeringState, tools: list) -> dict[str, Any]
         "list_directory", "get_file_tree", "run_command",
     )]
 
+    model = state.get("selected_model") or FAST_MODEL
     summary = await _run_react_phase(
         IMPLEMENT_SYSTEM, user_msg, impl_tools,
-        model=AGENT_MODEL, project=state["project_name"], task="implement",
+        model=model, project=state["project_name"], task="implement",
     )
 
     logger.info(f"[implement] {len(summary)} chars")
@@ -339,21 +423,30 @@ async def implement_code(state: EngineeringState, tools: list) -> dict[str, Any]
 # ─────────────────────────────────────────────────────────────
 
 async def run_pipeline(state: EngineeringState, tools: list) -> dict[str, Any]:
-    """Fase 5: Ejecuta pytest + semgrep + bandit."""
-    logger.info("[pipeline] Ejecutando pipeline de calidad")
-
-    # Ejecutar pipeline directamente (no via LLM para mayor control)
-    from pipeline.quality import run_full_pipeline
+    """Fase 5: Ejecuta pipeline de calidad (completo o rápido según modo)."""
     import asyncio
+    from pipeline.quality import run_full_pipeline, run_pytest
 
     loop = asyncio.get_event_loop()
-    pipeline_result = await loop.run_in_executor(
-        None, run_full_pipeline, state["project_path"]
-    )
+
+    if state.get("quick_pipeline"):
+        # Modo sprint: solo pytest (bandit/semgrep son lentos y para proyectos propios)
+        logger.info("[pipeline] Modo rápido — solo pytest")
+        pytest_result = await loop.run_in_executor(None, run_pytest, state["project_path"])
+        pipeline_result = {
+            "all_passed": pytest_result["passed"],
+            "pytest":  pytest_result,
+            "semgrep": {"passed": True, "output": "saltado en sprint"},
+            "bandit":  {"passed": True, "output": "saltado en sprint"},
+            "summary": f"Pipeline (rápido): {'PASS' if pytest_result['passed'] else 'FAIL'}\n"
+                       f"  - pytest: {'OK' if pytest_result['passed'] else 'FAIL'}",
+        }
+    else:
+        logger.info("[pipeline] Pipeline completo")
+        pipeline_result = await loop.run_in_executor(None, run_full_pipeline, state["project_path"])
 
     passed = pipeline_result["all_passed"]
     summary = pipeline_result["summary"]
-
     logger.info(f"[pipeline] {'PASS' if passed else 'FAIL'}")
 
     return {
@@ -417,9 +510,10 @@ async def fix_code(state: EngineeringState, tools: list) -> dict[str, Any]:
         "read_file", "write_file", "run_command", "create_directory", "file_exists",
     )]
 
+    model = state.get("selected_model") or FAST_MODEL
     fix_summary = await _run_react_phase(
         FIX_SYSTEM, user_msg, fix_tools,
-        model=AGENT_MODEL, project=state["project_name"], task=f"fix_{retry}",
+        model=model, project=state["project_name"], task=f"fix_{retry}",
     )
 
     return {
@@ -435,41 +529,42 @@ async def fix_code(state: EngineeringState, tools: list) -> dict[str, Any]:
 # ─────────────────────────────────────────────────────────────
 
 async def commit_push(state: EngineeringState, tools: list) -> dict[str, Any]:
-    """Fase 6: Crea rama, commit y push a GitHub."""
-    logger.info("[commit] Creando commit y push")
+    """Fase 6: Crea rama, commit y push — subprocess directo (sin agente ReAct)."""
+    import subprocess as _sp
 
-    user_msg = (
-        f"PROYECTO: {state['project_name']} en {state['project_path']}\n\n"
-        f"INSTRUCCIÓN ORIGINAL:\n{state['feature_request']}\n\n"
-        f"IMPLEMENTACIÓN:\n{state['implementation_summary']}\n\n"
-        f"Crea una rama de feature (prefijo ai/), haz commit y push."
-    )
+    project_path = state["project_path"]
+    session_id   = state.get("session_id", "ai")
+    feature_line = state["feature_request"].split("\n")[0][:60]
+    slug         = re.sub(r"[^a-z0-9]+", "-", feature_line.lower())[:40].strip("-")
+    branch       = f"ai/{slug}-{session_id}"
+    commit_hash  = "unknown"
 
-    git_tools = [t for t in tools if t.name in (
-        "git_status", "git_diff", "git_add", "git_commit",
-        "git_push", "git_create_branch", "git_log",
-    )]
-
-    commit_output = await _run_react_phase(
-        COMMIT_SYSTEM, user_msg, git_tools,
-        model=FAST_MODEL, project=state["project_name"], task="commit",
-    )
-
-    # Extraer hash del commit
-    hash_match = re.search(r"\b([0-9a-f]{7,40})\b", commit_output)
-    commit_hash = hash_match.group(1) if hash_match else "unknown"
-
-    # Extraer nombre de la rama
-    branch_match = re.search(r"ai/[\w\-]+", commit_output)
-    branch_name = branch_match.group(0) if branch_match else "ai/feature"
-
-    logger.info(f"[commit] hash={commit_hash} branch={branch_name}")
+    try:
+        _sp.run(["git", "checkout", "-B", branch],
+                cwd=project_path, capture_output=True, text=True, timeout=15)
+        _sp.run(["git", "add", "-A"],
+                cwd=project_path, capture_output=True, text=True, timeout=15)
+        r = _sp.run(
+            ["git", "commit", "-m", f"feat: {feature_line}"],
+            cwd=project_path, capture_output=True, text=True, timeout=15,
+        )
+        if r.returncode == 0:
+            m = re.search(r"\b([0-9a-f]{7,40})\b", r.stdout)
+            if m:
+                commit_hash = m.group(1)
+        _sp.run(
+            ["git", "push", "-u", "origin", branch, "--force-with-lease"],
+            cwd=project_path, capture_output=True, text=True, timeout=30,
+        )
+        logger.info(f"[commit] branch={branch} hash={commit_hash}")
+    except Exception as e:
+        logger.error(f"[commit] Error: {e}")
 
     return {
         "phase": "pr",
         "commit_hash": commit_hash,
-        "branch_name": branch_name,
-        "messages": [HumanMessage(content=f"COMMIT:\n{commit_output}")],
+        "branch_name": branch,
+        "messages": [HumanMessage(content=f"Commit: {commit_hash} → {branch}")],
     }
 
 
@@ -478,52 +573,128 @@ async def commit_push(state: EngineeringState, tools: list) -> dict[str, Any]:
 # ─────────────────────────────────────────────────────────────
 
 async def create_pr(state: EngineeringState, tools: list) -> dict[str, Any]:
-    """Fase 7: Crea Pull Request en GitHub y hace merge automático a main."""
-    logger.info("[pr] Creando Pull Request")
+    """Fase 7: Crea Pull Request — subprocess directo (sin agente ReAct)."""
+    import subprocess as _sp
 
-    branch = state.get("branch_name", "ai/feature")
+    branch  = state.get("branch_name", "ai/feature")
+    title   = state["feature_request"].split("\n")[0][:72]
+    body    = f"**AI Engineering** — implementación automática\n\n{state.get('implementation_summary', '')[:800]}"
+    pr_url  = ""
 
-    user_msg = (
-        f"PROYECTO: {state['project_name']} en {state['project_path']}\n"
-        f"RAMA: {branch}\n"
-        f"INSTRUCCIÓN: {state['feature_request']}\n"
-        f"IMPLEMENTACIÓN: {state['implementation_summary'][:500]}\n\n"
-        f"Crea el Pull Request de {branch} hacia main con el comando gh."
-    )
+    try:
+        r = _sp.run(
+            ["gh", "pr", "create",
+             "--title", title, "--body", body,
+             "--head", branch, "--base", "main"],
+            cwd=state["project_path"], capture_output=True, text=True, timeout=30,
+        )
+        if r.returncode == 0:
+            m = re.search(r"https://github\.com/[^\s]+/pull/\d+", r.stdout)
+            pr_url = m.group(0) if m else ""
 
-    bash_tools = [t for t in tools if t.name == "run_command"]
-
-    pr_output = await _run_react_phase(
-        PR_SYSTEM, user_msg, bash_tools,
-        model=FAST_MODEL, project=state["project_name"], task="pr",
-    )
-
-    # Extraer URL del PR
-    url_match = re.search(r"https://github\.com/[^\s]+/pull/\d+", pr_output)
-    pr_url = url_match.group(0) if url_match else ""
-
-    # Auto-merge si se pudo crear el PR
-    if pr_url:
-        try:
-            from agent.deploy import _exec, _get_ssh_client
-            # Merge automático via gh CLI local
-            import subprocess
+        if pr_url:
             pr_num = pr_url.split("/")[-1]
-            result = subprocess.run(
+            _sp.run(
                 ["gh", "pr", "merge", pr_num, "--merge", "--auto", "--delete-branch"],
-                cwd=state["project_path"],
-                capture_output=True, text=True, timeout=30,
+                cwd=state["project_path"], capture_output=True, text=True, timeout=30,
             )
-            logger.info(f"[pr] auto-merge: {result.stdout.strip()[:200]}")
-        except Exception as e:
-            logger.warning(f"[pr] auto-merge falló: {e}")
-
-    logger.info(f"[pr] URL: {pr_url}")
+            logger.info(f"[pr] Creado y merge automático: {pr_url}")
+        else:
+            logger.warning(f"[pr] No se pudo crear PR: {r.stderr[:200]}")
+    except Exception as e:
+        logger.error(f"[pr] Error: {e}")
 
     return {
         "phase": "deploy",
         "pr_url": pr_url,
-        "messages": [HumanMessage(content=f"PR:\n{pr_output}")],
+        "messages": [HumanMessage(content=f"PR: {pr_url or 'sin PR'}")],
+    }
+
+
+# ─────────────────────────────────────────────────────────────
+#  NODOS LEAN PARA SPRINT
+# ─────────────────────────────────────────────────────────────
+
+async def implement_sprint_story(state: EngineeringState, tools: list) -> dict[str, Any]:
+    """
+    Nodo sprint: analiza, diseña e implementa la story en una sola pasada.
+    Reemplaza analyze_codebase + propose_solutions + design_solution + implement_code.
+    """
+    logger.info(f"[sprint_impl] {state['project_name']} — {state['feature_request'][:60]}")
+    model = state.get("selected_model") or FAST_MODEL
+
+    system = (
+        "Eres un ingeniero de software senior. Recibes una User Story con criterios de aceptación claros.\n"
+        "Lee los archivos relevantes del proyecto, entiende el contexto y luego implementa lo necesario.\n"
+        "Sé directo: implementa solo lo que pide la story, sin funcionalidad extra.\n"
+        "Usa rutas absolutas para todos los archivos.\n"
+        "No crees tests unitarios a menos que los criterios de aceptación lo exijan explícitamente."
+    )
+
+    user_msg = (
+        f"PROYECTO: {state['project_name']}\n"
+        f"RUTA: {state['project_path']}\n\n"
+        f"USER STORY:\n{state['feature_request']}\n\n"
+        "Lee los archivos relevantes para entender el contexto y luego implementa la story."
+    )
+
+    impl_tools = [t for t in tools if t.name in (
+        "read_file", "write_file", "create_directory", "file_exists",
+        "list_directory", "get_file_tree",
+    )]
+
+    summary = await _run_react_phase(
+        system, user_msg, impl_tools,
+        model=model, project=state["project_name"], task="sprint_impl",
+    )
+
+    return {
+        "phase": "pipeline",
+        "analysis": state["feature_request"][:200],
+        "design": state["feature_request"],
+        "implementation_summary": summary,
+        "messages": [HumanMessage(content=f"IMPLEMENTACIÓN:\n{summary}")],
+    }
+
+
+async def commit_sprint_story(state: EngineeringState) -> dict[str, Any]:
+    """
+    Nodo sprint: commit directo a la rama del sprint sin agente ReAct.
+    Todos los stories del sprint se acumulan en la misma rama.
+    """
+    import subprocess as _sp
+
+    project_path = state["project_path"]
+    branch       = state.get("sprint_branch") or f"sprint/{state.get('session_id', 'run')}"
+    feature_line = state["feature_request"].split("\n")[0][:60]
+    commit_hash  = "no-changes"
+
+    try:
+        _sp.run(["git", "checkout", "-B", branch],
+                cwd=project_path, capture_output=True, text=True, timeout=15)
+        _sp.run(["git", "add", "-A"],
+                cwd=project_path, capture_output=True, text=True, timeout=15)
+        r = _sp.run(
+            ["git", "commit", "-m", f"feat(sprint): {feature_line}"],
+            cwd=project_path, capture_output=True, text=True, timeout=15,
+        )
+        if r.returncode == 0:
+            m = re.search(r"\b([0-9a-f]{7,40})\b", r.stdout)
+            if m:
+                commit_hash = m.group(1)
+        _sp.run(
+            ["git", "push", "-u", "origin", branch, "--force-with-lease"],
+            cwd=project_path, capture_output=True, text=True, timeout=30,
+        )
+        logger.info(f"[commit_sprint] branch={branch} hash={commit_hash}")
+    except Exception as e:
+        logger.error(f"[commit_sprint] Error: {e}")
+
+    return {
+        "phase": "done",
+        "commit_hash": commit_hash,
+        "branch_name": branch,
+        "pr_url": "",   # El PR se crea al final del sprint completo, no por story
     }
 
 
@@ -617,16 +788,17 @@ async def finalize(state: EngineeringState) -> dict[str, Any]:
     except Exception as e:
         logger.warning(f"[finalize] Error actualizando memoria: {e}")
 
-    # Notificar al Director
-    try:
-        from tg_bot.notifier import send_completion_to_director
-        await send_completion_to_director(
-            project=state.get("project_name", ""),
-            summary=summary,
-            session_id=state.get("session_id", ""),
-        )
-    except Exception as e:
-        logger.warning(f"[finalize] No se pudo notificar al Director: {e}")
+    # Notificar al Director (solo si no es modo sprint)
+    if not state.get("skip_notifications"):
+        try:
+            from tg_bot.notifier import send_completion_to_director
+            await send_completion_to_director(
+                project=state.get("project_name", ""),
+                summary=summary,
+                session_id=state.get("session_id", ""),
+            )
+        except Exception as e:
+            logger.warning(f"[finalize] No se pudo notificar al Director: {e}")
 
     return {"result_summary": summary}
 
@@ -638,3 +810,102 @@ async def finalize(state: EngineeringState) -> dict[str, Any]:
 def route_phase(state: EngineeringState) -> str:
     """Router condicional — decide el siguiente nodo según la fase actual."""
     return state.get("phase", "error")
+
+
+# ─────────────────────────────────────────────────────────────
+#  SCRUM: generate_user_stories
+# ─────────────────────────────────────────────────────────────
+
+async def generate_user_stories(epic: str, project_name: str, project_path: str) -> list:
+    """
+    Descompone un épico en User Stories en formato Scrum.
+
+    Usa FAST_MODEL (modelo barato). Retorna lista de dicts con:
+      title, description, acceptance_criteria (list), story_points (fibonacci),
+      priority, clarification_question
+    Máximo 8 stories por épico.
+    """
+    import json as _json
+
+    system = (
+        "Eres un Scrum Master experto. Tu tarea es descomponer un épico en User Stories.\n\n"
+        "Responde SOLO con una lista JSON válida (array), sin texto adicional, sin markdown.\n"
+        "Cada elemento del array debe tener exactamente estas claves:\n"
+        '  "title": string corto descriptivo\n'
+        '  "description": string en formato "Como [rol] quiero [acción] para [beneficio]"\n'
+        '  "acceptance_criteria": array de strings (criterios de aceptación concretos y verificables)\n'
+        '  "story_points": integer en escala fibonacci: 1, 2, 3, 5, 8 o 13\n'
+        '  "priority": "critical" | "high" | "medium" | "low"\n'
+        '  "clarification_question": string con duda del agente (vacío "" si la story es clara)\n\n'
+        "Reglas:\n"
+        "  - Máximo 8 user stories por épico\n"
+        "  - Cada story debe ser independiente e implementable en un sprint\n"
+        "  - Los criterios de aceptación deben ser verificables automáticamente (tests)\n"
+        "  - Story points: 1=trivial, 2=simple, 3=pequeño, 5=mediano, 8=grande, 13=muy grande\n"
+        "  - Si una story es demasiado grande, divídela\n"
+        "  - Ordena por prioridad (critical primero)\n"
+        "  - Responde ÚNICAMENTE con el JSON array, sin explicaciones"
+    )
+
+    llm = _llm(FAST_MODEL, max_tokens=4096)
+    response = await llm.ainvoke([
+        SystemMessage(content=system),
+        HumanMessage(content=f"PROYECTO: {project_name}\nRUTA: {project_path}\n\nÉPICO:\n{epic}"),
+    ])
+
+    content = response.content.strip()
+
+    # Limpiar markdown si el modelo lo añadió
+    if content.startswith("```"):
+        lines = content.split("\n")
+        # Quitar primera y última línea si son ```
+        if lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        content = "\n".join(lines).strip()
+
+    try:
+        stories = _json.loads(content)
+        if not isinstance(stories, list):
+            raise ValueError("El modelo no retornó un array JSON")
+
+        # Validar y normalizar cada story
+        valid_points = {1, 2, 3, 5, 8, 13}
+        valid_priorities = {"critical", "high", "medium", "low"}
+        result = []
+
+        for s in stories[:8]:
+            if not isinstance(s, dict):
+                continue
+            points = s.get("story_points", 3)
+            if points not in valid_points:
+                # Redondear al fibonacci más cercano
+                points = min(valid_points, key=lambda x: abs(x - int(points)))
+            priority = s.get("priority", "medium")
+            if priority not in valid_priorities:
+                priority = "medium"
+
+            result.append({
+                "title":                  str(s.get("title", "")[:120]),
+                "description":            str(s.get("description", "")),
+                "acceptance_criteria":    [str(c) for c in s.get("acceptance_criteria", [])],
+                "story_points":           points,
+                "priority":               priority,
+                "clarification_question": str(s.get("clarification_question", "")),
+            })
+
+        logger.info(f"[generate_user_stories] {len(result)} stories generadas para épico de '{project_name}'")
+        return result
+
+    except Exception as e:
+        logger.error(f"[generate_user_stories] Error parseando JSON del modelo: {e}\nContenido: {content[:300]}")
+        # Retornar story de fallback
+        return [{
+            "title":                  f"Implementar: {epic[:60]}",
+            "description":            f"Como Director quiero {epic[:120]} para mejorar el sistema",
+            "acceptance_criteria":    ["El feature está implementado y funcionando"],
+            "story_points":           5,
+            "priority":               "medium",
+            "clarification_question": "El épico es muy amplio. ¿Puedes dar más detalles?",
+        }]

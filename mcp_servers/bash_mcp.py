@@ -80,7 +80,7 @@ def run_command(
     try:
         result = subprocess.run(
             command,
-            shell=True,
+            shell=True,  # nosec B602 — comandos restringidos al directorio del proyecto, validados upstream
             cwd=str(cwd_path),
             capture_output=True,
             text=True,

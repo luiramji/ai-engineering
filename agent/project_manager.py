@@ -61,6 +61,16 @@ def upsert_project(project: dict) -> dict:
     return project
 
 
+def delete_project(project_id: str) -> bool:
+    """Elimina un proyecto del registro. No toca el repo local."""
+    data = _load()
+    filtered = [p for p in data if p.get("id") != project_id]
+    if len(filtered) == len(data):
+        return False
+    _save(filtered)
+    return True
+
+
 def update_memory(project_id: str, memory_update: dict) -> bool:
     """Actualiza la memoria viva de un proyecto."""
     data = _load()

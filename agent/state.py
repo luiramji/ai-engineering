@@ -16,6 +16,8 @@ class EngineeringState(TypedDict):
     feature_request: str           # Instrucción en lenguaje natural
     project_name: str              # ID del proyecto (e.g. 'tracker_master')
     project_path: str              # Ruta absoluta al codebase del proyecto
+    clarifications: str            # Contexto adicional del Director tras la fase de clarificación
+    selected_model: str            # Modelo elegido para esta sesión (basado en complejidad)
 
     # ── Contexto de proyecto ──────────────────────────────────
     project_data: dict             # Datos del proyecto desde projects.json
@@ -60,6 +62,10 @@ class EngineeringState(TypedDict):
     error: Optional[str]           # Error si el agente falla
     requires_director_auth: bool   # True si necesita autorización pendiente
     auth_reason: str               # Por qué necesita autorización
+    skip_proposal: bool            # True en modo sprint: saltarse propuestas al Director
+    skip_notifications: bool       # True en modo sprint: no enviar Telegram por story
+    quick_pipeline: bool           # True en modo sprint: solo pytest (sin bandit/semgrep)
+    sprint_branch: str             # Rama compartida del sprint para commits agrupados
 
     # ── Output final ────────────────────────────────────────
     result_summary: str            # Resumen final para el usuario

@@ -30,7 +30,7 @@ REVIEW_MODEL   = os.getenv("REVIEW_MODEL",   "gpt-4o")              # revisión 
 LONG_CTX_MODEL = os.getenv("LONG_CTX_MODEL", "gemini-2.5-pro")      # contexto largo
 
 # ── Web UI ───────────────────────────────────────────────────
-WEB_HOST     = os.getenv("WEB_HOST",     "0.0.0.0")
+WEB_HOST     = os.getenv("WEB_HOST",     "0.0.0.0")  # nosec B104 — intencional, servidor público
 WEB_PORT     = int(os.getenv("WEB_PORT", "8080"))
 WEB_USER     = os.getenv("WEB_USER",     "admin")
 WEB_PASSWORD = os.getenv("WEB_PASSWORD", "ai-engineering-2026")
@@ -50,6 +50,11 @@ VULTR_API_KEY    = os.getenv("VULTR_API_KEY", "VYFCBC26ATANVYJIS5BECXO2D4FB73VMA
 SERVER1_HOST     = os.getenv("SERVER1_HOST",  "149.28.209.93")
 SERVER1_USER     = os.getenv("SERVER1_USER",  "tracker")
 SERVER1_SSH_KEY  = os.getenv("SERVER1_SSH_KEY", "/home/aidev/.ssh/id_ed25519")
+
+# Servidor de aplicaciones (proyectos nuevos por defecto)
+APP_SERVER_HOST  = os.getenv("APP_SERVER_HOST",  "104.207.149.136")
+APP_SERVER_USER  = os.getenv("APP_SERVER_USER",  "root")
+APP_SERVER_KEY   = os.getenv("APP_SERVER_KEY",   "/home/aidev/.ssh/id_ed25519")
 
 # ── Secrets vault ────────────────────────────────────────────
 SECRETS_FILE = DATA_DIR / "secrets.enc"

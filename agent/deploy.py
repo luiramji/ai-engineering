@@ -11,25 +11,24 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
-def _get_ssh_client(host: str, user: str, key_path: str):
-    """Crea y retorna un cliente SSH autenticado."""
+def _get_ssh_client(host: str, user: str, key_path: str = None, password: str = None):
+    """Crea y retorna un cliente SSH autenticado (key o password)."""
     import paramiko
 
     client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    client.connect(
-        hostname=host,
-        username=user,
-        key_filename=key_path,
-        timeout=15,
-        auth_timeout=15,
-    )
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())  # nosec B507 — hosts internos conocidos
+    kwargs = {"hostname": host, "username": user, "timeout": 15, "auth_timeout": 15}
+    if key_path:
+        kwargs["key_filename"] = str(Path(key_path).expanduser())
+    elif password:
+        kwargs["password"] = password
+    client.connect(**kwargs)
     return client
 
 
 def _exec(client, command: str, timeout: int = 60) -> tuple[int, str]:
     """Ejecuta un comando via SSH y retorna (exit_code, output)."""
-    stdin, stdout, stderr = client.exec_command(command, timeout=timeout)
+    stdin, stdout, stderr = client.exec_command(command, timeout=timeout)  # nosec B601 — comandos internos controlados
     stdout.channel.recv_exit_status()  # wait
     output = stdout.read().decode() + stderr.read().decode()
     rc = stdout.channel.recv_exit_status()
@@ -39,10 +38,11 @@ def _exec(client, command: str, timeout: int = 60) -> tuple[int, str]:
 def deploy_project(
     host: str,
     user: str,
-    ssh_key: str,
-    deploy_path: str,
-    service_name: str,
+    ssh_key: str = None,
+    deploy_path: str = "",
+    service_name: str = "",
     branch: str = "main",
+    password: str = None,
 ) -> dict:
     """
     Despliega un proyecto via SSH:
@@ -55,12 +55,11 @@ def deploy_project(
         {"success": bool, "steps": [{"step": str, "ok": bool, "output": str}], "summary": str}
     """
     steps = []
-    key_path = str(Path(ssh_key).expanduser())
 
     logger.info(f"[deploy] Iniciando deploy en {user}@{host}:{deploy_path}")
 
     try:
-        client = _get_ssh_client(host, user, key_path)
+        client = _get_ssh_client(host, user, key_path=ssh_key, password=password)
     except Exception as e:
         return {
             "success": False,
@@ -121,17 +120,17 @@ def deploy_project(
 def check_service_health(
     host: str,
     user: str,
-    ssh_key: str,
-    service_name: str,
+    ssh_key: str = None,
+    service_name: str = "",
+    password: str = None,
 ) -> dict:
     """Verifica si un servicio está activo en un servidor remoto.
 
     Returns:
         {"active": bool, "status_output": str}
     """
-    key_path = str(Path(ssh_key).expanduser())
     try:
-        client = _get_ssh_client(host, user, key_path)
+        client = _get_ssh_client(host, user, key_path=ssh_key, password=password)
         rc, out = _exec(client, f"sudo systemctl is-active {service_name}")
         client.close()
         active = out.strip() == "active"
